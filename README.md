@@ -108,6 +108,7 @@ Than, If you have image with text in your file it works with Azure Intelligent D
 
 On the original Copilot chat, pdf and docx are both convert ton text but only if file content texte format (not image).
 
+
 # Tokens Usage
 
 ## 1. ChatTokensUsageRepository and ChatTokensUsage
@@ -133,14 +134,6 @@ This is a sample of un document in this container :
 }
 ```
 
-> **IMPORTANT**
-> 
-> Than you need to add new container in CosmosDB database. For now, is not >implemented in Deployment script. So you need to add it manually.
-> 
-> Add a new container in CosmosDB database : **chattokensusage**
-> With partition key : **/chatId**
-
-
 ## 2. ServiceExtensions
 
 To use this new CosmosDB container, we need to update **ServiceExtension.cs** file (in webapi/Extentions/)
@@ -156,6 +149,14 @@ In **AddPersistentChatStore** method, you need to instantiate the new repository
 
 And you can add the equivalent on each case in the switch statement.
 
+> **IMPORTANT**
+> 
+> Than you need to add new container in CosmosDB database. For now, is not >implemented in Deployment script. So you need to add it manually.
+> 
+> Add a new container in CosmosDB database : **chattokensusage**
+> With partition key : **/chatId**
+
+
 ## 3. PowerBI Report
 
 To track tokens usages, I created a PowerBI report connected directly to the CosmosDB Container.
@@ -169,11 +170,9 @@ I update the front application to disable Plugins, Plans & Personas but I will r
 # Next Features
 
 1. Add an Azure function that will be triggered by a CosmosDB trigger to **delete vector index** in vector DB.
-2. Add Semantic Memory for Document ingestion and Search when this framework support Postgres vectorDB.
 3. Add a new feature to propose **3 nexts questions** that the user can ask after a bot response.
 4. Reactivate **Plugins, Plans**
 5. Add a **new plugins** to **show** how we can create and add plugins in this Copilot Chat.
-6. Use Postgres for documents in chat session and Azure cognitive search for global document (with hybrid search). But, with plugin.
 
 # Conclusion
 
