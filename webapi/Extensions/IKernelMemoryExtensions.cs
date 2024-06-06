@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CopilotChat.Shared;
@@ -51,6 +52,12 @@ internal static class IKernelMemoryExtensions
         }
         else
         {
+            //Turnoff defaultHandlers (form Deletedocument and formreco (model layouts with workadown)
+            //Add VectorDB postgres
+            //Warning new config format with searchclient, AzDocInt
+            //Addd custom pipeline
+            //BUT WE NEED SK RC3 BEFORE
+
             if (hasOcr)
             {
                 memoryBuilder.WithCustomOcr(appBuilder.Configuration);
@@ -184,9 +191,9 @@ internal static class IKernelMemoryExtensions
         CancellationToken cancellationToken = default)
     {
         var memories = await memoryClient.SearchMemoryAsync(indexName, "*", 0.0F, chatId, cancellationToken: cancellationToken);
-        foreach (var memory in memories.Results)
-        {
-            await memoryClient.DeleteDocumentAsync(indexName, memory.Link, cancellationToken);
-        }
+        var documentIds = memories.Results.Select(memory => memory.Link.Split('/').First()).Distinct().ToArray();
+        var tasks = documentIds.Select(documentId => memoryClient.DeleteDocumentAsync(documentId, indexName, cancellationToken)).ToArray();
+
+        Task.WaitAll(tasks, cancellationToken);
     }
 }

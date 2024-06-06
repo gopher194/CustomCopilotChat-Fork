@@ -356,7 +356,6 @@ public class CustomChatPlugin
         {
             this._logger.LogWarning("ChatSkill.ChatAsync token usage unknown. Ensure token management has been implemented correctly.");
         }
-
         return context;
     }
 
@@ -448,7 +447,7 @@ public class CustomChatPlugin
             chatHistoryString += "\n" + PromptUtils.FormatChatHistoryMessage(CopilotChatMessage.AuthorRoles.User, deserializedPlan.OriginalUserInput);
 
             // Add bot message proposal as prompt context message
-            chatContext.Variables.Set("planFunctions", this._externalInformationSkill.FormattedFunctionsString(deserializedPlan.Plan));            
+            chatContext.Variables.Set("planFunctions", this._externalInformationSkill.FormattedFunctionsString(deserializedPlan.Plan));
             var promptTemplateFactory = new BasicPromptTemplateFactory();
             var proposedPlanTemplate = promptTemplateFactory.Create(this._promptOptions.ProposedPlanBotMessage, new PromptTemplateConfig());
 
@@ -779,6 +778,29 @@ public class CustomChatPlugin
             ? await this._externalInformationSkill.ExecutePlanAsync(planContext, plan, cancellationToken)
             : await this._externalInformationSkill.InvokePlannerAsync(userIntent, planContext, cancellationToken);
     }
+
+    private async Task<CopilotChatMessage> GetChatMessageAsync(string message, string userId, string userName, string chatId, string type, CancellationToken cancellationToken)
+    {
+        if (!await this._chatSessionRepository.TryFindByIdAsync(chatId))
+        {
+            throw new ArgumentException("Chat session does not exist.");
+        }
+
+        var chatMessage = new CopilotChatMessage(
+          userId,
+          userName,
+          chatId,
+          message,
+          string.Empty,
+          null,
+          CopilotChatMessage.AuthorRoles.User,
+          // Default to a standard message if the `type` is not recognized
+          Enum.TryParse(type, out CopilotChatMessage.ChatMessageType typeAsEnum) && Enum.IsDefined(typeof(CopilotChatMessage.ChatMessageType), typeAsEnum)
+              ? typeAsEnum
+              : CopilotChatMessage.ChatMessageType.Message);
+        return chatMessage;
+    }
+
 
     /// <summary>
     /// Save a new message to the chat history.

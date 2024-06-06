@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
@@ -93,20 +94,42 @@ public class ChatController : ControllerBase, IDisposable
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status504GatewayTimeout)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> ChatAsync(
         [FromServices] IKernel kernel,
+        [FromServices] SpareKernels spareKernels,
         [FromServices] IHubContext<MessageRelayHub> messageRelayHubContext,
         [FromServices] CopilotChatPlanner planner,
-        [FromServices] AskConverter askConverter,
         [FromServices] ChatSessionRepository chatSessionRepository,
         [FromServices] ChatParticipantRepository chatParticipantRepository,
+        [FromServices] ChatMessageRepository chatMessageRepository,
         [FromServices] IAuthInfo authInfo,
         [FromBody] Ask ask,
         [FromRoute] Guid chatId)
     {
         this._logger.LogDebug("Chat message received.");
-
-        return await this.HandleRequest(ChatFunctionName, kernel, messageRelayHubContext, planner, askConverter, chatSessionRepository, chatParticipantRepository, authInfo, ask, chatId.ToString());
+        try
+        {
+            return await this.HandleRequest(ChatFunctionName, kernel, messageRelayHubContext, planner, chatSessionRepository, chatParticipantRepository, authInfo, ask, chatId.ToString());
+        }
+        catch (SKException ex)
+        {
+            if (ex.InnerException is HttpOperationException httpEx)
+            {
+                if (httpEx.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    foreach (var k in spareKernels.Kernels)
+                    {
+                        //Delete the last message from user cause double
+                        await chatMessageRepository.DeleteAsync(await chatMessageRepository.FindLastByChatIdAsync(chatId.ToString()));
+                        return await this.HandleRequest(ChatFunctionName, k, messageRelayHubContext, planner, chatSessionRepository, chatParticipantRepository, authInfo, ask, chatId.ToString());
+                    }
+                    return this.StatusCode(429, "Too many request. Please try after few minutes...");
+                }
+                throw ex;
+            }
+            throw ex;
+        }
     }
 
     /// <summary>
@@ -129,11 +152,12 @@ public class ChatController : ControllerBase, IDisposable
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status504GatewayTimeout)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> ProcessPlanAsync(
         [FromServices] IKernel kernel,
+        [FromServices] SpareKernels spareKernels,
         [FromServices] IHubContext<MessageRelayHub> messageRelayHubContext,
         [FromServices] CopilotChatPlanner planner,
-        [FromServices] AskConverter askConverter,
         [FromServices] ChatSessionRepository chatSessionRepository,
         [FromServices] ChatParticipantRepository chatParticipantRepository,
         [FromServices] IAuthInfo authInfo,
@@ -142,7 +166,7 @@ public class ChatController : ControllerBase, IDisposable
     {
         this._logger.LogDebug("plan request received.");
 
-        return await this.HandleRequest(ProcessPlanFunctionName, kernel, messageRelayHubContext, planner, askConverter, chatSessionRepository, chatParticipantRepository, authInfo, ask, chatId.ToString());
+        return await this.HandleRequest(ProcessPlanFunctionName, kernel, messageRelayHubContext, planner, chatSessionRepository, chatParticipantRepository, authInfo, ask, chatId.ToString());
     }
 
     /// <summary>
@@ -164,7 +188,6 @@ public class ChatController : ControllerBase, IDisposable
        IKernel kernel,
        IHubContext<MessageRelayHub> messageRelayHubContext,
        CopilotChatPlanner planner,
-       AskConverter askConverter,
        ChatSessionRepository chatSessionRepository,
        ChatParticipantRepository chatParticipantRepository,
        IAuthInfo authInfo,
@@ -172,7 +195,7 @@ public class ChatController : ControllerBase, IDisposable
        string chatId)
     {
         // Put ask's variables in the context we will use.
-        var contextVariables = askConverter.GetContextVariables(ask);
+        var contextVariables = GetContextVariables(ask, authInfo, chatId);
 
         // Verify that the chat exists and that the user has access to it.
         ChatSession? chat = null;
@@ -199,6 +222,7 @@ public class ChatController : ControllerBase, IDisposable
         {
             function = kernel.Functions.GetFunction(ChatPluginName, functionName);
         }
+
         catch (SKException ex)
         {
             this._logger.LogError("Failed to find {PluginName}/{FunctionName} on server: {Exception}", ChatPluginName, functionName, ex);
@@ -207,18 +231,20 @@ public class ChatController : ControllerBase, IDisposable
 
         // Run the function.
         KernelResult? result = null;
+        using CancellationTokenSource? cts = this._serviceOptions.TimeoutLimitInS is not null
+               // Create a cancellation token source with the timeout if specified
+               ? new CancellationTokenSource(TimeSpan.FromSeconds((double)this._serviceOptions.TimeoutLimitInS))
+               : null;
+
+        //bool success = false;
         try
         {
-            using CancellationTokenSource? cts = this._serviceOptions.TimeoutLimitInS is not null
-                // Create a cancellation token source with the timeout if specified
-                ? new CancellationTokenSource(TimeSpan.FromSeconds((double)this._serviceOptions.TimeoutLimitInS))
-                : null;
-
-            result = await kernel.RunAsync(function!, contextVariables, cts?.Token ?? default);
+            result = await kernel.RunAsync(function!, contextVariables, cts?.Token ?? default) ;
             this._telemetryService.TrackPluginFunction(ChatPluginName, functionName, true);
         }
         catch (Exception ex)
         {
+            cts?.Cancel(true);
             if (ex is OperationCanceledException || ex.InnerException is OperationCanceledException)
             {
                 // Log the timeout and return a 504 response
@@ -232,7 +258,7 @@ public class ChatController : ControllerBase, IDisposable
 
         AskResult chatAskResult = new()
         {
-            Value = result.GetValue<string>() ?? string.Empty,
+            Value = result?.GetValue<string>() ?? string.Empty,
             Variables = contextVariables.Select(v => new KeyValuePair<string, string>(v.Key, v.Value))
         };
 
@@ -403,6 +429,26 @@ public class ChatController : ControllerBase, IDisposable
         }
         return;
     }
+
+    private static ContextVariables GetContextVariables(Ask ask, IAuthInfo authInfo, string chatId)
+    {
+        const string UserIdKey = "userId";
+        const string UserNameKey = "userName";
+        const string ChatIdKey = "chatId";
+
+        var contextVariables = new ContextVariables(ask.Input);
+        foreach (var variable in ask.Variables)
+        {
+            contextVariables.Set(variable.Key, variable.Value);
+        }
+
+        contextVariables.Set(UserIdKey, authInfo.UserId);
+        contextVariables.Set(UserNameKey, authInfo.Name);
+        contextVariables.Set(ChatIdKey, chatId);
+
+        return contextVariables;
+    }
+
 
     /// <summary>
     /// Dispose of the object.

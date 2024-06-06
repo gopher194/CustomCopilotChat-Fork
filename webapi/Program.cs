@@ -44,7 +44,6 @@ public sealed class Program
             .AddOptions(builder.Configuration)
             .AddPersistentChatStore()
             .AddPlugins(builder.Configuration)
-            .AddUtilities()
             .AddChatCopilotAuthentication(builder.Configuration)
             .AddChatCopilotAuthorization();
 
@@ -52,6 +51,7 @@ public sealed class Program
         builder
             .AddBotConfig()
             .AddSemanticKernelServices()
+            .AddSpareServices()
             .AddPlannerServices()
             .AddKernelMemoryServices();
 

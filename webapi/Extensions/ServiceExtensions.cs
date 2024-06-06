@@ -60,6 +60,8 @@ public static class CopilotChatServiceExtensions
 
         AddOptions<KernelMemoryConfig>(MemoryConfiguration.KernelMemorySection);
 
+        AddOptions<AzureOpenAISpareServicesOptions>(AzureOpenAISpareServicesConfiguration.AzureOpenAISpareServicesSection);
+
         AddOptions<FrontendOptions>(FrontendOptions.PropertyName);
 
         return services;
@@ -79,11 +81,6 @@ public static class CopilotChatServiceExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart()
             .PostConfigure(TrimStringProperties);
-    }
-
-    internal static IServiceCollection AddUtilities(this IServiceCollection services)
-    {
-        return services.AddScoped<AskConverter>();
     }
 
     internal static IServiceCollection AddPlugins(this IServiceCollection services, IConfiguration configuration)
